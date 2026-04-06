@@ -1,70 +1,14 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'dart:convert';
 import '../models/cycle_log.dart';
 import '../providers/log_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../theme.dart';
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-String _formatDetectionClass(String cls) {
-  if (cls.isEmpty || cls == 'none') return 'No Detection';
-  final parts = cls.split('_');
-  if (parts.length < 2) return cls;
-  final crop = parts[0];
-  final rest = parts
-      .sublist(1)
-      .map((w) => w.isEmpty
-          ? ''
-          : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}')
-      .join(' ');
-  return '$crop — $rest';
-}
-
-Color _ccombinedColor(double v) {
-  if (v < 0.4) return FarmLensColors.primary;
-  if (v < 0.65) return FarmLensColors.amber;
-  return FarmLensColors.alert;
-}
-
-String _timeAgo(int ts) {
-  if (ts == 0) return 'never';
-  final diff = DateTime.now().millisecondsSinceEpoch ~/ 1000 - ts;
-  if (diff < 0) return 'just now';
-  if (diff < 60) return '${diff}s ago';
-  if (diff < 3600) return '${diff ~/ 60}m ago';
-  return '${diff ~/ 3600}h ago';
-}
-
-String _formatDate(int ts) {
-  if (ts == 0) return '—';
-  final dt =
-      DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: false);
-  const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-  ];
-  return '${months[dt.month - 1]} ${dt.day}';
-}
-
-String _formatTime(int ts) {
-  if (ts == 0) return '—';
-  final dt =
-      DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: false);
-  final h = dt.hour.toString().padLeft(2, '0');
-  final m = dt.minute.toString().padLeft(2, '0');
-  return '$h:$m';
-}
-
-// ─────────────────────────────────────────────
-// Log Screen
-// ─────────────────────────────────────────────
+import '../utils/formatters.dart';
 
 class LogScreen extends StatefulWidget {
   const LogScreen({super.key});
@@ -81,18 +25,15 @@ class _LogScreenState extends State<LogScreen> {
   }
 
   Future<void> _loadLogs() async {
-    final settings =
-        Provider.of<SettingsProvider>(context, listen: false);
-    final logProvider =
-        Provider.of<LogProvider>(context, listen: false);
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final logProvider = Provider.of<LogProvider>(context, listen: false);
     if (settings.deviceBaseUrl.isNotEmpty) {
       await logProvider.loadLogs(ApiService(settings.deviceBaseUrl));
     }
   }
 
   Future<void> _exportLogs() async {
-    final logProvider =
-        Provider.of<LogProvider>(context, listen: false);
+    final logProvider = Provider.of<LogProvider>(context, listen: false);
     final cycles = logProvider.cycles;
     if (cycles.isEmpty) {
       if (!mounted) return;
@@ -118,13 +59,8 @@ class _LogScreenState extends State<LogScreen> {
             })
         .toList();
 
-    final jsonStr =
-        const JsonEncoder.withIndent('  ').convert(jsonList);
-
-    await Share.share(
-      jsonStr,
-      subject: 'FarmLens Traceability Log',
-    );
+    final jsonStr = const JsonEncoder.withIndent('  ').convert(jsonList);
+    await Share.share(jsonStr, subject: 'FarmLens Traceability Log');
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -132,8 +68,8 @@ class _LogScreenState extends State<LogScreen> {
         content: const Text('Log exported'),
         backgroundColor: FarmLensColors.primary,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
@@ -144,8 +80,7 @@ class _LogScreenState extends State<LogScreen> {
       builder: (context, logProvider, _) {
         final cycles = logProvider.cycles;
         final alertCount = cycles.where((c) => c.alert).length;
-        final lastTs =
-            cycles.isNotEmpty ? cycles.first.ts : 0;
+        final lastTs = cycles.isNotEmpty ? cycles.first.ts : 0;
 
         return Scaffold(
           backgroundColor: FarmLensColors.background,
@@ -158,8 +93,7 @@ class _LogScreenState extends State<LogScreen> {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 16, vertical: 14),
                   child: Row(
-                    mainAxisAlignment:
-                        MainAxisAlignment.spaceBetween,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
                         'Traceability Log',
@@ -175,15 +109,12 @@ class _LogScreenState extends State<LogScreen> {
                           foregroundColor: FarmLensColors.primary,
                           padding: EdgeInsets.zero,
                           minimumSize: Size.zero,
-                          tapTargetSize:
-                              MaterialTapTargetSize.shrinkWrap,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
                         child: const Text(
                           'Export',
                           style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
+                              fontSize: 14, fontWeight: FontWeight.w600),
                         ),
                       ),
                     ],
@@ -204,7 +135,7 @@ class _LogScreenState extends State<LogScreen> {
                     child: Text(
                       '${cycles.length} cycles · '
                       '$alertCount alert${alertCount == 1 ? '' : 's'} · '
-                      'Last ${_timeAgo(lastTs)}',
+                      'Last ${timeAgo(lastTs)}',
                       style: const TextStyle(
                         fontSize: 12,
                         color: Color(0xFF0F6E56),
@@ -224,9 +155,7 @@ class _LogScreenState extends State<LogScreen> {
   }
 
   Widget _buildBody(LogProvider logProvider, List<CycleLog> cycles) {
-    if (logProvider.isLoading) {
-      return const _ShimmerList();
-    }
+    if (logProvider.isLoading) return const _ShimmerList();
 
     if (logProvider.error != null) {
       return Center(
@@ -286,7 +215,7 @@ class _LogScreenState extends State<LogScreen> {
 }
 
 // ─────────────────────────────────────────────
-// Shimmer Loading List
+// Shimmer Loading
 // ─────────────────────────────────────────────
 
 class _ShimmerList extends StatefulWidget {
@@ -308,8 +237,7 @@ class _ShimmerListState extends State<_ShimmerList>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
-    _opacity =
-        Tween<double>(begin: 0.4, end: 1.0).animate(_controller);
+    _opacity = Tween<double>(begin: 0.4, end: 1.0).animate(_controller);
   }
 
   @override
@@ -322,23 +250,21 @@ class _ShimmerListState extends State<_ShimmerList>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _opacity,
-      builder: (context, _) {
-        return ListView.builder(
-          itemCount: 5,
-          itemBuilder: (context, i) => Opacity(
-            opacity: _opacity.value,
-            child: Container(
-              height: 64,
-              margin: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 6),
-              decoration: BoxDecoration(
-                color: FarmLensColors.border,
-                borderRadius: BorderRadius.circular(8),
-              ),
+      builder: (context, _) => ListView.builder(
+        itemCount: 5,
+        itemBuilder: (context, i) => Opacity(
+          opacity: _opacity.value,
+          child: Container(
+            height: 64,
+            margin:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            decoration: BoxDecoration(
+              color: FarmLensColors.border,
+              borderRadius: BorderRadius.circular(8),
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
@@ -358,12 +284,11 @@ class _LogRow extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       child: Container(
         height: 64,
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: const BoxDecoration(
           border: Border(
-            bottom: BorderSide(
-                color: FarmLensColors.border, width: 0.5),
+            bottom:
+                BorderSide(color: FarmLensColors.border, width: 0.5),
           ),
         ),
         child: Row(
@@ -375,7 +300,7 @@ class _LogRow extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
-                    _formatDate(cycle.ts),
+                    formatDate(cycle.ts),
                     style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
@@ -383,7 +308,7 @@ class _LogRow extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    _formatTime(cycle.ts),
+                    formatTime(cycle.ts),
                     style: const TextStyle(
                       fontSize: 10,
                       color: FarmLensColors.textSecondary,
@@ -401,7 +326,7 @@ class _LogRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    _formatDetectionClass(cycle.detectionClass),
+                    formatDetectionClass(cycle.detectionClass),
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w500,
@@ -413,7 +338,6 @@ class _LogRow extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 10,
                       color: FarmLensColors.textSecondary,
-                      overflow: TextOverflow.ellipsis,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -422,7 +346,7 @@ class _LogRow extends StatelessWidget {
               ),
             ),
 
-            // ── Score pill + alert dot ───────────────
+            // ── Score + alert dot ────────────────────
             Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -459,10 +383,9 @@ class _ScorePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: _ccombinedColor(value),
+        color: ccombinedColor(value),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(

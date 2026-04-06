@@ -7,46 +7,7 @@ import '../providers/live_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../theme.dart';
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-Color _ccombinedColor(double v) {
-  if (v < 0.4) return FarmLensColors.primary;
-  if (v < 0.65) return FarmLensColors.amber;
-  return FarmLensColors.alert;
-}
-
-String _formatDetectionClass(String cls) {
-  if (cls.isEmpty || cls == 'none') return 'No Detection';
-  final parts = cls.split('_');
-  if (parts.length < 2) return cls;
-  final crop = parts[0];
-  final rest = parts
-      .sublist(1)
-      .map((w) => w.isEmpty
-          ? ''
-          : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}')
-      .join(' ');
-  return '$crop — $rest';
-}
-
-bool _isDisease(String cls) =>
-    cls.isNotEmpty && !cls.contains('healthy') && cls != 'none';
-
-String _timeAgo(int ts) {
-  if (ts == 0) return 'never';
-  final diff = DateTime.now().millisecondsSinceEpoch ~/ 1000 - ts;
-  if (diff < 0) return 'just now';
-  if (diff < 60) return '${diff}s';
-  if (diff < 3600) return '${diff ~/ 60}m';
-  return '${diff ~/ 3600}h';
-}
-
-// ─────────────────────────────────────────────
-// Dashboard Screen
-// ─────────────────────────────────────────────
+import '../utils/formatters.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -56,17 +17,63 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  String _lastAlertCycleId = '';
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final settings =
-          Provider.of<SettingsProvider>(context, listen: false);
-      final live = Provider.of<LiveProvider>(context, listen: false);
-      if (settings.deviceBaseUrl.isNotEmpty) {
-        live.startPolling(ApiService(settings.deviceBaseUrl));
-      }
+      _startPolling();
     });
+  }
+
+  void _startPolling() {
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final live = Provider.of<LiveProvider>(context, listen: false);
+    if (settings.deviceBaseUrl.isNotEmpty) {
+      live.startPolling(ApiService(settings.deviceBaseUrl));
+    }
+  }
+
+  void _manualRefresh() {
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final live = Provider.of<LiveProvider>(context, listen: false);
+    if (settings.deviceBaseUrl.isNotEmpty) {
+      live.stopPolling();
+      live.startPolling(ApiService(settings.deviceBaseUrl));
+    }
+  }
+
+  void _checkAndShowAlertSnackBar(LiveData data) {
+    if (data.alert &&
+        data.cycleId.isNotEmpty &&
+        data.cycleId != _lastAlertCycleId) {
+      _lastAlertCycleId = data.cycleId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '⚠ Disease Alert: ${formatDetectionClass(data.detectionClass)}',
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+            backgroundColor: FarmLensColors.alert,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+            margin: EdgeInsets.only(
+              bottom: MediaQuery.of(context).size.height - 120,
+              left: 16,
+              right: 16,
+            ),
+          ),
+        );
+      });
+    }
   }
 
   @override
@@ -83,21 +90,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final isEmpty = data.cycleId.isEmpty;
         final isError = connProvider.state == DeviceConnectionState.error;
 
+        _checkAndShowAlertSnackBar(data);
+
         return Scaffold(
           backgroundColor: FarmLensColors.background,
           body: SafeArea(
             child: Column(
               children: [
                 // ── App Bar ──────────────────────────────
-                _AppBar(nodeId: data.nodeId),
+                _AppBar(
+                  nodeId: data.nodeId,
+                  onRefresh: _manualRefresh,
+                ),
 
                 // ── Body ─────────────────────────────────
                 Expanded(
                   child: (isEmpty || isError)
-                      ? _ErrorState(
-                          connProvider: connProvider,
-                          data: data,
-                        )
+                      ? _ErrorState(connProvider: connProvider, data: data)
                       : SingleChildScrollView(
                           padding: const EdgeInsets.all(16),
                           child: Column(
@@ -106,13 +115,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               _StatusCard(
                                 isOffline: liveProvider.isOffline,
                                 ts: data.ts,
+                                cycleId: data.cycleId,
                               ),
                               const SizedBox(height: 12),
 
                               // Section 2: Alert banner
                               AnimatedSwitcher(
-                                duration:
-                                    const Duration(milliseconds: 300),
+                                duration: const Duration(milliseconds: 300),
                                 child: data.alert
                                     ? _AlertBanner(data: data)
                                     : const SizedBox.shrink(),
@@ -167,13 +176,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 class _AppBar extends StatelessWidget {
   final String nodeId;
-  const _AppBar({required this.nodeId});
+  final VoidCallback onRefresh;
+
+  const _AppBar({required this.nodeId, required this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: FarmLensColors.card,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -185,23 +196,36 @@ class _AppBar extends StatelessWidget {
               color: FarmLensColors.textPrimary,
             ),
           ),
-          if (nodeId.isNotEmpty)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: FarmLensColors.primary.withAlpha(26),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                nodeId,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: FarmLensColors.primary,
+          Row(
+            children: [
+              if (nodeId.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: FarmLensColors.primary.withAlpha(26),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    nodeId,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: FarmLensColors.primary,
+                    ),
+                  ),
+                ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: onRefresh,
+                child: const Icon(
+                  Icons.refresh_rounded,
+                  size: 22,
+                  color: FarmLensColors.textSecondary,
                 ),
               ),
-            ),
+            ],
+          ),
         ],
       ),
     );
@@ -215,13 +239,26 @@ class _AppBar extends StatelessWidget {
 class _StatusCard extends StatelessWidget {
   final bool isOffline;
   final int ts;
-  const _StatusCard({required this.isOffline, required this.ts});
+  final String cycleId;
+
+  const _StatusCard({
+    required this.isOffline,
+    required this.ts,
+    required this.cycleId,
+  });
+
+  String _cycleNumber(String id) {
+    if (id.isEmpty) return '';
+    final parts = id.split('-');
+    if (parts.length >= 3) return '#${parts[parts.length - 2]}';
+    return '';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final cycleNum = _cycleNumber(cycleId);
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: FarmLensColors.card,
         borderRadius: BorderRadius.circular(12),
@@ -251,10 +288,20 @@ class _StatusCard extends StatelessWidget {
                   color: FarmLensColors.textPrimary,
                 ),
               ),
+              if (cycleNum.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Text(
+                  'Cycle $cycleNum',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: FarmLensColors.textSecondary,
+                  ),
+                ),
+              ],
             ],
           ),
           Text(
-            ts == 0 ? '—' : 'Updated ${_timeAgo(ts)} ago',
+            ts == 0 ? '—' : 'Updated ${timeAgo(ts)}',
             style: const TextStyle(
               fontSize: 11,
               color: FarmLensColors.textSecondary,
@@ -306,7 +353,7 @@ class _AlertBanner extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _formatDetectionClass(data.detectionClass),
+                  formatDetectionClass(data.detectionClass),
                   style: const TextStyle(
                     fontSize: 12,
                     color: FarmLensColors.textPrimary,
@@ -315,10 +362,7 @@ class _AlertBanner extends StatelessWidget {
               ],
             ),
           ),
-          _ScorePill(
-            value: data.ccombined,
-            color: FarmLensColors.alert,
-          ),
+          _ScorePill(value: data.ccombined, color: FarmLensColors.alert),
         ],
       ),
     );
@@ -389,13 +433,9 @@ class _AnimatedGaugeState extends State<_AnimatedGauge>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    _animation = Tween<double>(
-      begin: 0,
-      end: widget.value,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
-    ));
+    _animation = Tween<double>(begin: 0, end: widget.value).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
     _controller.forward();
   }
 
@@ -407,10 +447,8 @@ class _AnimatedGaugeState extends State<_AnimatedGauge>
       _animation = Tween<double>(
         begin: _previousValue,
         end: widget.value,
-      ).animate(CurvedAnimation(
-        parent: _controller,
-        curve: Curves.easeInOut,
-      ));
+      ).animate(
+          CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
       _controller
         ..reset()
         ..forward();
@@ -429,7 +467,7 @@ class _AnimatedGaugeState extends State<_AnimatedGauge>
       animation: _animation,
       builder: (context, _) {
         final v = _animation.value.clamp(0.0, 1.0);
-        final color = _ccombinedColor(v);
+        final color = ccombinedColor(v);
         return SizedBox(
           width: 180,
           height: 110,
@@ -442,17 +480,13 @@ class _AnimatedGaugeState extends State<_AnimatedGauge>
               ),
               Positioned(
                 bottom: 8,
-                child: Column(
-                  children: [
-                    Text(
-                      v.toStringAsFixed(2),
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: color,
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  v.toStringAsFixed(2),
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
                 ),
               ),
             ],
@@ -488,7 +522,6 @@ class _GaugePainter extends CustomPainter {
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
 
-    // Track arc (full semicircle)
     canvas.drawArc(
       Rect.fromCircle(center: Offset(cx, cy), radius: radius),
       math.pi,
@@ -497,7 +530,6 @@ class _GaugePainter extends CustomPainter {
       trackPaint,
     );
 
-    // Value arc
     if (value > 0) {
       canvas.drawArc(
         Rect.fromCircle(center: Offset(cx, cy), radius: radius),
@@ -531,8 +563,7 @@ class _SensorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color =
-        stress ? FarmLensColors.alert : FarmLensColors.primary;
+    final color = stress ? FarmLensColors.alert : FarmLensColors.primary;
     final clampedPct = pct.clamp(0.0, 100.0);
 
     return Container(
@@ -562,7 +593,6 @@ class _SensorCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          // Progress bar
           ClipRRect(
             borderRadius: BorderRadius.circular(3),
             child: SizedBox(
@@ -575,7 +605,6 @@ class _SensorCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          // Status chip
           Container(
             padding:
                 const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -608,14 +637,11 @@ class _DetectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final disease = _isDisease(data.detectionClass);
-    final pillBg = disease
-        ? const Color(0xFFFCEBEB)
-        : const Color(0xFFE1F5EE);
+    final disease = isDisease(data.detectionClass);
+    final pillBg =
+        disease ? const Color(0xFFFCEBEB) : const Color(0xFFE1F5EE);
     final pillText =
         disease ? FarmLensColors.alert : FarmLensColors.primary;
-    final confPct =
-        '${(data.detectionConf * 100).toStringAsFixed(0)}%';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -643,7 +669,7 @@ class _DetectionCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _formatDetectionClass(data.detectionClass),
+                      formatDetectionClass(data.detectionClass),
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
@@ -652,7 +678,7 @@ class _DetectionCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${_timeAgo(data.ts)} ago',
+                      timeAgo(data.ts),
                       style: const TextStyle(
                         fontSize: 11,
                         color: FarmLensColors.textSecondary,
@@ -669,7 +695,7 @@ class _DetectionCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  confPct,
+                  '${(data.detectionConf * 100).toStringAsFixed(0)}%',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -686,22 +712,18 @@ class _DetectionCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// Section 6 – Error / Empty State
+// Section 6 – Error State
 // ─────────────────────────────────────────────
 
 class _ErrorState extends StatelessWidget {
   final ConnectionProvider connProvider;
   final LiveData data;
 
-  const _ErrorState({
-    required this.connProvider,
-    required this.data,
-  });
+  const _ErrorState({required this.connProvider, required this.data});
 
   @override
   Widget build(BuildContext context) {
-    final settings =
-        Provider.of<SettingsProvider>(context, listen: false);
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
 
     return Center(
       child: Padding(
@@ -726,20 +748,29 @@ class _ErrorState extends StatelessWidget {
             Text(
               data.ts == 0
                   ? 'Last seen: Never'
-                  : 'Last seen: ${_timeAgo(data.ts)} ago',
+                  : 'Last seen: ${timeAgo(data.ts)}',
               style: const TextStyle(
+                fontSize: 12,
+                color: FarmLensColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Check device is on the same WiFi network',
+              textAlign: TextAlign.center,
+              style: TextStyle(
                 fontSize: 12,
                 color: FarmLensColors.textSecondary,
               ),
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              onPressed: connProvider.state ==
-                      DeviceConnectionState.connecting
-                  ? null
-                  : () => connProvider.connect(settings.deviceBaseUrl),
-              icon: connProvider.state ==
-                      DeviceConnectionState.connecting
+              onPressed:
+                  connProvider.state == DeviceConnectionState.connecting
+                      ? null
+                      : () =>
+                          connProvider.connect(settings.deviceBaseUrl),
+              icon: connProvider.state == DeviceConnectionState.connecting
                   ? const SizedBox(
                       width: 16,
                       height: 16,
@@ -754,8 +785,7 @@ class _ErrorState extends StatelessWidget {
                 backgroundColor: FarmLensColors.primary,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                    borderRadius: BorderRadius.circular(10)),
                 elevation: 0,
               ),
             ),
@@ -778,8 +808,7 @@ class _ScorePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(12),

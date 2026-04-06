@@ -6,4 +6,5 @@ class FarmLensConstants {
   static const int pollIntervalSeconds = 5;
   static const int apiTimeoutSeconds = 8;
   static const String prefKeyBaseUrl = 'device_base_url';
+  static const String prefKeyRecentUrls = 'recent_urls';
 }

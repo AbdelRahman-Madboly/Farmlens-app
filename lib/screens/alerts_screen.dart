@@ -4,43 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/cycle_log.dart';
 import '../providers/live_provider.dart';
 import '../theme.dart';
-
-// ─────────────────────────────────────────────
-// Helpers (shared with dashboard)
-// ─────────────────────────────────────────────
-
-String _formatDetectionClass(String cls) {
-  if (cls.isEmpty || cls == 'none') return 'No Detection';
-  final parts = cls.split('_');
-  if (parts.length < 2) return cls;
-  final crop = parts[0];
-  final rest = parts
-      .sublist(1)
-      .map((w) => w.isEmpty
-          ? ''
-          : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}')
-      .join(' ');
-  return '$crop — $rest';
-}
-
-String _timeAgo(int ts) {
-  if (ts == 0) return 'never';
-  final diff = DateTime.now().millisecondsSinceEpoch ~/ 1000 - ts;
-  if (diff < 0) return 'just now';
-  if (diff < 60) return '${diff}s ago';
-  if (diff < 3600) return '${diff ~/ 60}m ago';
-  return '${diff ~/ 3600}h ago';
-}
-
-Color _ccombinedColor(double v) {
-  if (v < 0.4) return FarmLensColors.primary;
-  if (v < 0.65) return FarmLensColors.amber;
-  return FarmLensColors.alert;
-}
-
-// ─────────────────────────────────────────────
-// Alerts Screen
-// ─────────────────────────────────────────────
+import '../utils/formatters.dart';
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({super.key});
@@ -117,7 +81,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                 // ── Body ──────────────────────────────────
                 Expanded(
                   child: alerts.isEmpty
-                      ? _EmptyState()
+                      ? const _EmptyState()
                       : ListView.separated(
                           padding: const EdgeInsets.all(16),
                           itemCount: alerts.length,
@@ -141,6 +105,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
 // ─────────────────────────────────────────────
 
 class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
   @override
   Widget build(BuildContext context) {
     return const Center(
@@ -209,12 +175,11 @@ class _AlertCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Detection class + time
                   Row(
                     children: [
                       Expanded(
                         child: Text(
-                          _formatDetectionClass(alert.detectionClass),
+                          formatDetectionClass(alert.detectionClass),
                           style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
@@ -223,7 +188,7 @@ class _AlertCard extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        _timeAgo(alert.ts),
+                        timeAgo(alert.ts),
                         style: const TextStyle(
                           fontSize: 11,
                           color: FarmLensColors.textSecondary,
@@ -232,7 +197,6 @@ class _AlertCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 6),
-                  // Score + sensor readings
                   Row(
                     children: [
                       _ScorePill(value: alert.ccombined),
@@ -293,7 +257,7 @@ class _ScorePill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: _ccombinedColor(value),
+        color: ccombinedColor(value),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(

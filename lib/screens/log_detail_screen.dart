@@ -4,50 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/cycle_log.dart';
 import '../providers/log_provider.dart';
 import '../theme.dart';
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-String _formatDetectionClass(String cls) {
-  if (cls.isEmpty || cls == 'none') return 'No Detection';
-  final parts = cls.split('_');
-  if (parts.length < 2) return cls;
-  final crop = parts[0];
-  final rest = parts
-      .sublist(1)
-      .map((w) => w.isEmpty
-          ? ''
-          : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}')
-      .join(' ');
-  return '$crop — $rest';
-}
-
-bool _isDisease(String cls) =>
-    cls.isNotEmpty && !cls.contains('healthy') && cls != 'none';
-
-Color _ccombinedColor(double v) {
-  if (v < 0.4) return FarmLensColors.primary;
-  if (v < 0.65) return FarmLensColors.amber;
-  return FarmLensColors.alert;
-}
-
-String _formatDateTime(int ts) {
-  if (ts == 0) return '—';
-  final dt = DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: false);
-  const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-  ];
-  final h = dt.hour.toString().padLeft(2, '0');
-  final m = dt.minute.toString().padLeft(2, '0');
-  final s = dt.second.toString().padLeft(2, '0');
-  return '${months[dt.month - 1]} ${dt.day}, $h:$m:$s';
-}
-
-// ─────────────────────────────────────────────
-// Log Detail Screen
-// ─────────────────────────────────────────────
+import '../utils/formatters.dart';
 
 class LogDetailScreen extends StatelessWidget {
   final String cycleId;
@@ -56,9 +13,8 @@ class LogDetailScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final logProvider = Provider.of<LogProvider>(context, listen: false);
-    final CycleLog? cycle = logProvider.cycles
-        .where((c) => c.id == cycleId)
-        .firstOrNull;
+    final CycleLog? cycle =
+        logProvider.cycles.where((c) => c.id == cycleId).firstOrNull;
 
     if (cycle == null) {
       return const Scaffold(
@@ -93,7 +49,7 @@ class LogDetailScreen extends StatelessWidget {
       );
     }
 
-    final disease = _isDisease(cycle.detectionClass);
+    final disease = isDisease(cycle.detectionClass);
 
     return Scaffold(
       backgroundColor: FarmLensColors.background,
@@ -111,18 +67,16 @@ class LogDetailScreen extends StatelessWidget {
                       width: double.infinity,
                       height: 200,
                       margin: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF0F0EC),
-                        borderRadius: BorderRadius.circular(12),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFF0F0EC),
+                        borderRadius:
+                            BorderRadius.all(Radius.circular(12)),
                       ),
                       child: const Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            Icons.image_outlined,
-                            size: 48,
-                            color: Color(0xFFB4B2A9),
-                          ),
+                          Icon(Icons.image_outlined,
+                              size: 48, color: Color(0xFFB4B2A9)),
                           SizedBox(height: 8),
                           Text(
                             'Detection image — available in Phase 2',
@@ -137,173 +91,132 @@ class LogDetailScreen extends StatelessWidget {
                     ),
 
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // ── Detection Section ──────────────
+                          // ── Detection ─────────────────────
                           const _SectionHeader('Detection'),
-                          _InfoCard(
-                            rows: [
-                              _InfoRowData(
-                                label: 'Class',
-                                value: _formatDetectionClass(
-                                    cycle.detectionClass),
-                              ),
-                              _InfoRowData(
-                                label: 'Confidence',
-                                valueWidget: _ConfPill(
+                          _InfoCard(rows: [
+                            _InfoRowData(
+                              label: 'Class',
+                              value: formatDetectionClass(
+                                  cycle.detectionClass),
+                            ),
+                            _InfoRowData(
+                              label: 'Confidence',
+                              valueWidget: _ConfPill(
                                   pct: cycle.detectionConf,
-                                  disease: disease,
+                                  disease: disease),
+                            ),
+                            _InfoRowData(
+                              label: 'Combined Score',
+                              valueWidget:
+                                  _ScorePill(value: cycle.ccombined),
+                            ),
+                            _InfoRowData(
+                              label: 'Alert',
+                              valueWidget: Text(
+                                cycle.alert ? 'YES 🔴' : 'No 🟢',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: cycle.alert
+                                      ? FarmLensColors.alert
+                                      : FarmLensColors.primary,
                                 ),
                               ),
-                              _InfoRowData(
-                                label: 'Combined Score',
-                                valueWidget: _ScorePill(
-                                    value: cycle.ccombined),
-                              ),
-                              _InfoRowData(
-                                label: 'Alert',
-                                valueWidget: Text(
-                                  cycle.alert ? 'YES 🔴' : 'No 🟢',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: cycle.alert
-                                        ? FarmLensColors.alert
-                                        : FarmLensColors.primary,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
+                            ),
+                          ]),
                           const SizedBox(height: 20),
 
-                          // ── Sensors Section ────────────────
+                          // ── Sensors ────────────────────────
                           const _SectionHeader('Sensors'),
-                          _InfoCard(
-                            rows: [
-                              _InfoRowData(
-                                label: 'Soil Moisture',
-                                value:
-                                    '${cycle.moisturePct.toStringAsFixed(1)}%',
-                                valueColor: cycle.moisturePct < 30
-                                    ? FarmLensColors.alert
-                                    : FarmLensColors.primary,
-                              ),
-                              _InfoRowData(
-                                label: 'Water Level',
-                                value:
-                                    '${cycle.waterPct.toStringAsFixed(1)}%',
-                                valueColor: cycle.waterPct < 20
-                                    ? FarmLensColors.alert
-                                    : FarmLensColors.primary,
-                              ),
-                              _InfoRowData(
-                                label: 'Moisture Stress',
-                                valueWidget: _StressLabel(
-                                    stress: cycle.moisturePct < 30),
-                              ),
-                              _InfoRowData(
-                                label: 'Water Stress',
-                                valueWidget: _StressLabel(
-                                    stress: cycle.waterPct < 20),
-                              ),
-                              _InfoRowData(
-                                label: 'Cs Score',
-                                value: cycle.cs.toStringAsFixed(3),
-                              ),
-                            ],
-                          ),
+                          _InfoCard(rows: [
+                            _InfoRowData(
+                              label: 'Soil Moisture',
+                              value:
+                                  '${cycle.moisturePct.toStringAsFixed(1)}%',
+                              valueColor: cycle.moisturePct < 30
+                                  ? FarmLensColors.alert
+                                  : FarmLensColors.primary,
+                            ),
+                            _InfoRowData(
+                              label: 'Water Level',
+                              value:
+                                  '${cycle.waterPct.toStringAsFixed(1)}%',
+                              valueColor: cycle.waterPct < 20
+                                  ? FarmLensColors.alert
+                                  : FarmLensColors.primary,
+                            ),
+                            _InfoRowData(
+                              label: 'Moisture Stress',
+                              valueWidget: _StressLabel(
+                                  stress: cycle.moisturePct < 30),
+                            ),
+                            _InfoRowData(
+                              label: 'Water Stress',
+                              valueWidget: _StressLabel(
+                                  stress: cycle.waterPct < 20),
+                            ),
+                            _InfoRowData(
+                              label: 'Cs Score',
+                              value: cycle.cs.toStringAsFixed(3),
+                            ),
+                          ]),
                           const SizedBox(height: 20),
 
-                          // ── Fusion Section ─────────────────
+                          // ── Fusion ─────────────────────────
                           const _SectionHeader('Fusion'),
-                          _InfoCard(
-                            rows: [
-                              _InfoRowData(
-                                label: 'Cv (visual)',
-                                value: cycle.cv.toStringAsFixed(3),
-                              ),
-                              _InfoRowData(
-                                label: 'Cs (sensor)',
-                                value: cycle.cs.toStringAsFixed(3),
-                              ),
-                              const _InfoRowData(
-                                label: 'w1',
-                                value: '0.60',
-                              ),
-                              const _InfoRowData(
-                                label: 'w2',
-                                value: '0.40',
-                              ),
-                              _InfoRowData(
-                                label: 'Ccombined',
-                                valueWidget: _ScorePill(
-                                    value: cycle.ccombined),
-                              ),
-                            ],
-                          ),
+                          _InfoCard(rows: [
+                            _InfoRowData(
+                              label: 'Cv (visual)',
+                              value: cycle.cv.toStringAsFixed(3),
+                            ),
+                            _InfoRowData(
+                              label: 'Cs (sensor)',
+                              value: cycle.cs.toStringAsFixed(3),
+                            ),
+                            const _InfoRowData(
+                                label: 'w1', value: '0.60'),
+                            const _InfoRowData(
+                                label: 'w2', value: '0.40'),
+                            _InfoRowData(
+                              label: 'Ccombined',
+                              valueWidget:
+                                  _ScorePill(value: cycle.ccombined),
+                            ),
+                          ]),
                           const SizedBox(height: 20),
 
-                          // ── Traceability Section ───────────
+                          // ── Traceability ───────────────────
                           const _SectionHeader('Traceability'),
-                          _InfoCard(
-                            rows: [
-                              _InfoRowData(
-                                label: 'Cycle ID',
-                                valueWidget: SelectableText(
-                                  cycle.id,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontFamily: 'monospace',
-                                    color: FarmLensColors.textPrimary,
-                                  ),
+                          _InfoCard(rows: [
+                            _InfoRowData(
+                              label: 'Cycle ID',
+                              valueWidget: SelectableText(
+                                cycle.id,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontFamily: 'monospace',
+                                  color: FarmLensColors.textPrimary,
                                 ),
                               ),
-                              _InfoRowData(
-                                label: 'Node',
-                                value: cycle.nodeId,
-                              ),
-                              _InfoRowData(
-                                label: 'Timestamp',
-                                value: _formatDateTime(cycle.ts),
-                              ),
-                            ],
-                          ),
+                            ),
+                            _InfoRowData(
+                              label: 'Node',
+                              value: cycle.nodeId,
+                            ),
+                            _InfoRowData(
+                              label: 'Timestamp',
+                              value: formatDateTime(cycle.ts),
+                            ),
+                          ]),
                           const SizedBox(height: 20),
 
                           // ── ETRACE Badge ───────────────────
-                          Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 6),
-                              decoration: const BoxDecoration(
-                                color: Color(0xFFE1F5EE),
-                                borderRadius: BorderRadius.all(
-                                    Radius.circular(20)),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.check_rounded,
-                                    size: 14,
-                                    color: Color(0xFF0F6E56),
-                                  ),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'ETRACE Format Compatible',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFF0F6E56),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
+                          const Center(child: _EtraceBadge()),
                           const SizedBox(height: 24),
                         ],
                       ),
@@ -320,7 +233,7 @@ class LogDetailScreen extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// App Bar
+// Widgets
 // ─────────────────────────────────────────────
 
 class _AppBar extends StatelessWidget {
@@ -331,8 +244,7 @@ class _AppBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: FarmLensColors.card,
-      padding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
         children: [
           GestureDetector(
@@ -358,10 +270,6 @@ class _AppBar extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// Section Header
-// ─────────────────────────────────────────────
-
 class _SectionHeader extends StatelessWidget {
   final String label;
   const _SectionHeader(this.label);
@@ -383,22 +291,13 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// Info Card + Row
-// ─────────────────────────────────────────────
-
 class _InfoRowData {
   final String label;
   final String? value;
   final Color? valueColor;
   final Widget? valueWidget;
-
-  const _InfoRowData({
-    required this.label,
-    this.value,
-    this.valueColor,
-    this.valueWidget,
-  });
+  const _InfoRowData(
+      {required this.label, this.value, this.valueColor, this.valueWidget});
 }
 
 class _InfoCard extends StatelessWidget {
@@ -468,10 +367,6 @@ class _InfoCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// Small Widgets
-// ─────────────────────────────────────────────
-
 class _ScorePill extends StatelessWidget {
   final double value;
   const _ScorePill({required this.value});
@@ -481,16 +376,13 @@ class _ScorePill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: _ccombinedColor(value),
+        color: ccombinedColor(value),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(
         value.toStringAsFixed(2),
         style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-          color: Colors.white,
-        ),
+            fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
       ),
     );
   }
@@ -503,23 +395,17 @@ class _ConfPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = disease
-        ? const Color(0xFFFCEBEB)
-        : const Color(0xFFE1F5EE);
+    final bg =
+        disease ? const Color(0xFFFCEBEB) : const Color(0xFFE1F5EE);
     final fg = disease ? FarmLensColors.alert : FarmLensColors.primary;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(12),
-      ),
+          color: bg, borderRadius: BorderRadius.circular(12)),
       child: Text(
         '${(pct * 100).toStringAsFixed(0)}%',
         style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: fg,
-        ),
+            fontSize: 12, fontWeight: FontWeight.w600, color: fg),
       ),
     );
   }
@@ -537,6 +423,41 @@ class _StressLabel extends StatelessWidget {
         fontSize: 13,
         fontWeight: FontWeight.w600,
         color: stress ? FarmLensColors.alert : FarmLensColors.primary,
+      ),
+    );
+  }
+}
+
+class _EtraceBadge extends StatelessWidget {
+  const _EtraceBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return const ColoredBox(
+      color: Colors.transparent,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Color(0xFFE1F5EE),
+          borderRadius: BorderRadius.all(Radius.circular(20)),
+        ),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.check_rounded, size: 14, color: Color(0xFF0F6E56)),
+              SizedBox(width: 6),
+              Text(
+                'ETRACE Format Compatible',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0F6E56),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

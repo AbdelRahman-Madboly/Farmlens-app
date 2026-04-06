@@ -30,16 +30,29 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   Future<void> _loadRecent() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(FarmLensConstants.prefKeyBaseUrl) ?? '';
+    final recents =
+        prefs.getStringList(FarmLensConstants.prefKeyRecentUrls) ?? [];
+
     if (saved.isNotEmpty) {
       final uri = Uri.tryParse(saved);
-      if (uri != null) {
+      if (uri != null && mounted) {
         _ipController.text = uri.host;
         _portController.text = uri.port.toString();
       }
-      if (mounted) {
-        setState(() => _recentUrls = [saved]);
-      }
     }
+    if (mounted) {
+      setState(() => _recentUrls = recents.take(3).toList());
+    }
+  }
+
+  Future<void> _saveRecent(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    final recents =
+        prefs.getStringList(FarmLensConstants.prefKeyRecentUrls) ?? [];
+    recents.remove(url);
+    recents.insert(0, url);
+    await prefs.setStringList(
+        FarmLensConstants.prefKeyRecentUrls, recents.take(3).toList());
   }
 
   void _fillFromRecent(String url) {
@@ -91,14 +104,23 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
     if (success) {
       await settingsProvider.saveDeviceUrl(baseUrl);
+      await _saveRecent(baseUrl);
       if (!mounted) return;
       context.go('/main');
     } else {
-      final err =
-          connProvider.errorMessage ?? 'Could not connect to device';
+      final err = connProvider.errorMessage ?? 'Could not connect to device';
+      // Show descriptive error
+      String message = err;
+      if (err.toLowerCase().contains('socket') ||
+          err.toLowerCase().contains('network')) {
+        message =
+            'Check device is on the same WiFi network';
+      } else if (err.toLowerCase().contains('timeout')) {
+        message = 'Device not responding after ${FarmLensConstants.apiTimeoutSeconds} seconds';
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(err),
+          content: Text(message),
           backgroundColor: FarmLensColors.alert,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
@@ -162,7 +184,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                 children: [
                   const SizedBox(height: 24),
 
-                  // ── Top Section ──────────────────────────────────
+                  // ── Top Section ──────────────────────────────
                   const Icon(
                     Icons.eco_rounded,
                     size: 48,
@@ -187,7 +209,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                   ),
                   const SizedBox(height: 32),
 
-                  // ── Form Card ────────────────────────────────────
+                  // ── Form Card ────────────────────────────────
                   Container(
                     decoration: BoxDecoration(
                       color: FarmLensColors.card,
@@ -199,7 +221,6 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // IP
                         const Text(
                           'Device IP Address',
                           style: TextStyle(
@@ -219,8 +240,6 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                           decoration: _fieldDecoration('192.168.1.100'),
                         ),
                         const SizedBox(height: 12),
-
-                        // Port
                         const Text(
                           'Port',
                           style: TextStyle(
@@ -252,7 +271,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // ── Connect Button ───────────────────────────────
+                  // ── Connect Button ───────────────────────────
                   SizedBox(
                     width: double.infinity,
                     height: 52,
@@ -287,7 +306,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                     ),
                   ),
 
-                  // ── Recent IPs ───────────────────────────────────
+                  // ── Recent IPs ───────────────────────────────
                   if (_recentUrls.isNotEmpty) ...[
                     const SizedBox(height: 16),
                     Row(
@@ -331,7 +350,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                     ),
                   ],
 
-                  // ── Footer ───────────────────────────────────────
+                  // ── Footer ───────────────────────────────────
                   const SizedBox(height: 32),
                   const Text(
                     'Suez Canal University · IC EISIS 2026',

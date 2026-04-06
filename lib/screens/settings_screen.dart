@@ -183,7 +183,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             ),
                             TextButton(
-                              onPressed: () => context.go('/'),
+                              onPressed: () => context.go('/connect'),
                               style: TextButton.styleFrom(
                                 foregroundColor: FarmLensColors.primary,
                                 padding: EdgeInsets.zero,
