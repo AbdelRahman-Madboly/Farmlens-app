@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../constants.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 import '../theme.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -19,14 +19,32 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _navigate() async {
-    await Future.delayed(const Duration(seconds: 1));
+    // Small visual delay so the splash is visible
+    await Future.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
-    final prefs = await SharedPreferences.getInstance();
-    final url = prefs.getString(FarmLensConstants.prefKeyBaseUrl) ?? '';
+
+    // Wait for SettingsProvider to finish loading from SharedPreferences.
+    // main.dart calls loadFromPrefs() at construction, but it's async —
+    // we must not navigate until it resolves or the deviceBaseUrl will be
+    // empty even when a URL was previously saved, causing the dashboard
+    // to get stuck on the loading spinner forever.
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+
+    // Poll up to 3 seconds for prefs to load (usually <50ms)
+    int waited = 0;
+    while (!settings.isConfigured && settings.deviceBaseUrl.isEmpty && waited < 30) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waited++;
+      if (!mounted) return;
+    }
+
     if (!mounted) return;
-    if (url.isNotEmpty) {
+
+    if (settings.deviceBaseUrl.isNotEmpty) {
+      // Previously saved URL found — go straight to dashboard
       context.go('/main');
     } else {
+      // No saved URL — go to connection screen
       context.go('/connect');
     }
   }

@@ -63,16 +63,30 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     }
   }
 
+  /// Accepts both dotted-decimal IPs (192.168.1.x) and hostnames (farmlens.local)
   String? _validateIp(String? value) {
-    if (value == null || value.trim().isEmpty) return 'Enter an IP address';
-    final parts = value.trim().split('.');
-    if (parts.length != 4) return 'Enter a valid IP (e.g. 192.168.1.22)';
-    for (final p in parts) {
-      final n = int.tryParse(p);
-      if (n == null || n < 0 || n > 255) {
-        return 'Enter a valid IP (e.g. 192.168.1.22)';
-      }
+    if (value == null || value.trim().isEmpty) {
+      return 'Enter an IP address or hostname';
     }
+    final v = value.trim();
+
+    // Reject strings with spaces
+    if (v.contains(' ')) return 'No spaces allowed';
+
+    // If it looks like a dotted-decimal IP, validate each octet strictly
+    final parts = v.split('.');
+    if (parts.length == 4 && parts.every((p) => RegExp(r'^\d+$').hasMatch(p))) {
+      for (final p in parts) {
+        final n = int.tryParse(p);
+        if (n == null || n < 0 || n > 255) {
+          return 'Enter a valid IP (e.g. 192.168.1.22)';
+        }
+      }
+      return null; // valid IP
+    }
+
+    // Otherwise treat as hostname — accept anything without spaces
+    // e.g. farmlens.local, farmlens, mydevice.home
     return null;
   }
 
@@ -81,6 +95,14 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     final n = int.tryParse(value.trim());
     if (n == null || n < 1 || n > 65535) return 'Valid port: 1–65535';
     return null;
+  }
+
+  /// Fills the form with the stable mDNS hostname — no IP hunting required
+  void _useHostname() {
+    setState(() {
+      _ipController.text = 'farmlens.local';
+      _portController.text = '80';
+    });
   }
 
   Future<void> _handleConnect() async {
@@ -109,22 +131,24 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       context.go('/main');
     } else {
       final err = connProvider.errorMessage ?? 'Could not connect to device';
-      // Show descriptive error
       String message = err;
       if (err.toLowerCase().contains('socket') ||
           err.toLowerCase().contains('network')) {
-        message =
-            'Check device is on the same WiFi network';
+        message = 'Check device is on the same WiFi network';
       } else if (err.toLowerCase().contains('timeout')) {
-        message = 'Device not responding after ${FarmLensConstants.apiTimeoutSeconds} seconds';
+        message =
+            'Device not responding after ${FarmLensConstants.apiTimeoutSeconds} seconds';
+      } else if (ip.contains('.local')) {
+        message =
+            'Could not reach $ip — ensure ESP32 is on the same network, or use its IP instead';
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(message),
           backgroundColor: FarmLensColors.alert,
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       );
     }
@@ -209,6 +233,77 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                   ),
                   const SizedBox(height: 32),
 
+                  // ── mDNS Quick-Connect Banner ─────────────────
+                  GestureDetector(
+                    onTap: _useHostname,
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: FarmLensColors.primary.withAlpha(20),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: FarmLensColors.primary.withAlpha(60),
+                            width: 1),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.wifi_find,
+                              size: 18, color: FarmLensColors.primary),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: const [
+                                Text(
+                                  'Use farmlens.local  (recommended)',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: FarmLensColors.primary,
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'Connects by hostname — works even when the IP changes',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: FarmLensColors.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.arrow_forward_ios,
+                              size: 12, color: FarmLensColors.primary),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // ── Divider ──────────────────────────────────
+                  Row(
+                    children: const [
+                      Expanded(child: Divider(color: FarmLensColors.border)),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 10),
+                        child: Text(
+                          'or enter manually',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: FarmLensColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                      Expanded(child: Divider(color: FarmLensColors.border)),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
                   // ── Form Card ────────────────────────────────
                   Container(
                     decoration: BoxDecoration(
@@ -222,7 +317,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Device IP Address',
+                          'Device IP Address or Hostname',
                           style: TextStyle(
                             fontSize: 12,
                             color: FarmLensColors.textSecondary,
@@ -232,12 +327,14 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                         TextFormField(
                           controller: _ipController,
                           keyboardType: TextInputType.url,
+                          autocorrect: false,
                           validator: _validateIp,
                           style: const TextStyle(
                             fontSize: 14,
                             color: FarmLensColors.textPrimary,
                           ),
-                          decoration: _fieldDecoration('192.168.1.100'),
+                          decoration:
+                              _fieldDecoration('192.168.1.100  or  farmlens.local'),
                         ),
                         const SizedBox(height: 12),
                         const Text(
@@ -260,7 +357,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          'ESP32: port 80 · Raspberry Pi: port 8000',
+                          'ESP32: port 80  ·  Raspberry Pi: port 8000',
                           style: TextStyle(
                             fontSize: 11,
                             color: FarmLensColors.textSecondary,
@@ -338,8 +435,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                                 onPressed: () => _fillFromRecent(url),
                                 backgroundColor: Colors.transparent,
                                 side: const BorderSide(
-                                    color: FarmLensColors.primary,
-                                    width: 1),
+                                    color: FarmLensColors.primary, width: 1),
                                 padding: EdgeInsets.zero,
                                 visualDensity: VisualDensity.compact,
                               );

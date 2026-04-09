@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -18,24 +19,53 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   String _lastAlertCycleId = '';
+  LiveProvider? _liveProvider;
+  Timer? _startRetryTimer;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _liveProvider = Provider.of<LiveProvider>(context, listen: false);
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _startPolling();
+      _startPollingWithRetry();
     });
   }
 
-  void _startPolling() {
+  /// Tries to start polling. If deviceBaseUrl is still empty (SettingsProvider
+  /// not yet loaded), retries every 200ms for up to 5 seconds.
+  void _startPollingWithRetry() {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     final live = Provider.of<LiveProvider>(context, listen: false);
+
     if (settings.deviceBaseUrl.isNotEmpty) {
       live.startPolling(ApiService(settings.deviceBaseUrl));
+      return;
     }
+
+    // URL not ready yet — retry
+    int attempts = 0;
+    _startRetryTimer = Timer.periodic(const Duration(milliseconds: 200), (t) {
+      if (!mounted) { t.cancel(); return; }
+      attempts++;
+      final url = Provider.of<SettingsProvider>(context, listen: false).deviceBaseUrl;
+      if (url.isNotEmpty) {
+        t.cancel();
+        Provider.of<LiveProvider>(context, listen: false)
+            .startPolling(ApiService(url));
+      } else if (attempts >= 25) {
+        // 5 seconds passed, still empty — give up
+        t.cancel();
+      }
+    });
   }
 
   void _manualRefresh() {
+    _startRetryTimer?.cancel();
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     final live = Provider.of<LiveProvider>(context, listen: false);
     if (settings.deviceBaseUrl.isNotEmpty) {
@@ -56,9 +86,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             content: Text(
               '⚠ Disease Alert: ${formatDetectionClass(data.detectionClass)}',
               style: const TextStyle(
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
-              ),
+                  fontWeight: FontWeight.w600, color: Colors.white),
             ),
             backgroundColor: FarmLensColors.alert,
             behavior: SnackBarBehavior.floating,
@@ -78,7 +106,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
-    Provider.of<LiveProvider>(context, listen: false).stopPolling();
+    _startRetryTimer?.cancel();
+    _liveProvider?.stopPolling();
     super.dispose();
   }
 
@@ -94,137 +123,99 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
         return Scaffold(
           backgroundColor: FarmLensColors.background,
-          body: SafeArea(
-            child: Column(
+          appBar: AppBar(
+            backgroundColor: FarmLensColors.background,
+            elevation: 0,
+            title: Row(
               children: [
-                // ── App Bar ──────────────────────────────
-                _AppBar(
-                  nodeId: data.nodeId,
-                  onRefresh: _manualRefresh,
-                ),
-
-                // ── Body ─────────────────────────────────
-                Expanded(
-                  child: (isEmpty || isError)
-                      ? _ErrorState(connProvider: connProvider, data: data)
-                      : SingleChildScrollView(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            children: [
-                              // Section 1: Status row
-                              _StatusCard(
-                                isOffline: liveProvider.isOffline,
-                                ts: data.ts,
-                                cycleId: data.cycleId,
-                              ),
-                              const SizedBox(height: 12),
-
-                              // Section 2: Alert banner
-                              AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 300),
-                                child: data.alert
-                                    ? _AlertBanner(data: data)
-                                    : const SizedBox.shrink(),
-                              ),
-                              if (data.alert) const SizedBox(height: 12),
-
-                              // Section 3: Gauge
-                              _GaugeCard(data: data),
-                              const SizedBox(height: 12),
-
-                              // Section 4: Sensor row
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: _SensorCard(
-                                      title: 'Soil Moisture',
-                                      pct: data.moisturePct,
-                                      stress: data.moistureStress == 1,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: _SensorCard(
-                                      title: 'Water Level',
-                                      pct: data.waterPct,
-                                      stress: data.waterStress == 1,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-
-                              // Section 5: Detection card
-                              _DetectionCard(data: data),
-                              const SizedBox(height: 16),
-                            ],
-                          ),
-                        ),
-                ),
+                const Icon(Icons.eco_rounded,
+                    color: FarmLensColors.primary, size: 20),
+                const SizedBox(width: 8),
+                const Text('FarmLens',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: FarmLensColors.primary)),
+                const SizedBox(width: 8),
+                _NodeStatusDot(
+                    isConnected: connProvider.isConnected && !isError),
               ],
             ),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh,
+                    color: FarmLensColors.textSecondary),
+                onPressed: _manualRefresh,
+                tooltip: 'Refresh',
+              ),
+            ],
           ),
+          body: isError
+              ? _ErrorState(onRetry: _manualRefresh)
+              : isEmpty
+                  ? const _LoadingState()
+                  : _DashboardBody(data: data),
         );
       },
     );
   }
 }
 
-// ─────────────────────────────────────────────
-// App Bar
-// ─────────────────────────────────────────────
+// ─── Loading ──────────────────────────────────────────────────────────────────
 
-class _AppBar extends StatelessWidget {
-  final String nodeId;
-  final VoidCallback onRefresh;
-
-  const _AppBar({required this.nodeId, required this.onRefresh});
-
+class _LoadingState extends StatelessWidget {
+  const _LoadingState();
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: FarmLensColors.card,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            'FarmLens',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: FarmLensColors.textPrimary,
+          CircularProgressIndicator(color: FarmLensColors.primary),
+          SizedBox(height: 16),
+          Text('Connecting to node…',
+              style: TextStyle(
+                  color: FarmLensColors.textSecondary, fontSize: 14)),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Error ────────────────────────────────────────────────────────────────────
+
+class _ErrorState extends StatelessWidget {
+  final VoidCallback onRetry;
+  const _ErrorState({required this.onRetry});
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.wifi_off_rounded,
+              size: 48, color: FarmLensColors.textSecondary),
+          const SizedBox(height: 12),
+          const Text('Node offline',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: FarmLensColors.textPrimary)),
+          const SizedBox(height: 6),
+          const Text('Could not reach the ESP32 node',
+              style: TextStyle(
+                  fontSize: 13, color: FarmLensColors.textSecondary)),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Retry'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: FarmLensColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
-          ),
-          Row(
-            children: [
-              if (nodeId.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: FarmLensColors.primary.withAlpha(26),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    nodeId,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: FarmLensColors.primary,
-                    ),
-                  ),
-                ),
-              const SizedBox(width: 8),
-              GestureDetector(
-                onTap: onRefresh,
-                child: const Icon(
-                  Icons.refresh_rounded,
-                  size: 22,
-                  color: FarmLensColors.textSecondary,
-                ),
-              ),
-            ],
           ),
         ],
       ),
@@ -232,178 +223,117 @@ class _AppBar extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// Section 1 – Status Card
-// ─────────────────────────────────────────────
+// ─── Node status dot ──────────────────────────────────────────────────────────
 
-class _StatusCard extends StatelessWidget {
-  final bool isOffline;
-  final int ts;
-  final String cycleId;
-
-  const _StatusCard({
-    required this.isOffline,
-    required this.ts,
-    required this.cycleId,
-  });
-
-  String _cycleNumber(String id) {
-    if (id.isEmpty) return '';
-    final parts = id.split('-');
-    if (parts.length >= 3) return '#${parts[parts.length - 2]}';
-    return '';
-  }
-
+class _NodeStatusDot extends StatelessWidget {
+  final bool isConnected;
+  const _NodeStatusDot({required this.isConnected});
   @override
   Widget build(BuildContext context) {
-    final cycleNum = _cycleNumber(cycleId);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      width: 8,
+      height: 8,
       decoration: BoxDecoration(
-        color: FarmLensColors.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: FarmLensColors.border, width: 0.5),
+        shape: BoxShape.circle,
+        color: isConnected ? FarmLensColors.primary : FarmLensColors.alert,
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    );
+  }
+}
+
+// ─── Dashboard body ───────────────────────────────────────────────────────────
+
+class _DashboardBody extends StatelessWidget {
+  final LiveData data;
+  const _DashboardBody({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (data.alert) ...[
+            _AlertBanner(detectionClass: data.detectionClass),
+            const SizedBox(height: 12),
+          ],
+          _DetectionCard(data: data),
+          const SizedBox(height: 12),
+          _CombinedScoreCard(data: data),
+          const SizedBox(height: 12),
           Row(
             children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 400),
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isOffline
-                      ? FarmLensColors.alert
-                      : FarmLensColors.primary,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                isOffline ? 'Node offline' : 'Connected',
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: FarmLensColors.textPrimary,
-                ),
-              ),
-              if (cycleNum.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                Text(
-                  'Cycle $cycleNum',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: FarmLensColors.textSecondary,
-                  ),
-                ),
-              ],
+              Expanded(child: _SensorCard(
+                label: 'Soil Moisture',
+                value: data.moisturePct,
+                unit: '%',
+                icon: Icons.water_drop_outlined,
+                stress: data.moistureStress,
+                activeColor: FarmLensColors.primary,
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: _SensorCard(
+                label: 'Water Level',
+                value: data.waterPct,
+                unit: '%',
+                icon: Icons.waves_outlined,
+                stress: data.waterStress,
+                activeColor: FarmLensColors.amber,
+              )),
             ],
           ),
-          Text(
-            ts == 0 ? '—' : 'Updated ${timeAgo(ts)}',
-            style: const TextStyle(
-              fontSize: 11,
-              color: FarmLensColors.textSecondary,
-            ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _ScoreChip(
+                label: 'Cv  (AI conf.)',
+                value: data.cv,
+                color: FarmLensColors.primary,
+              )),
+              const SizedBox(width: 8),
+              Expanded(child: _ScoreChip(
+                label: 'Cs  (stress)',
+                value: data.cs,
+                color: FarmLensColors.alert,
+              )),
+            ],
           ),
+          const SizedBox(height: 12),
+          _CycleInfoCard(data: data),
         ],
       ),
     );
   }
 }
 
-// ─────────────────────────────────────────────
-// Section 2 – Alert Banner
-// ─────────────────────────────────────────────
+// ─── Alert Banner ─────────────────────────────────────────────────────────────
 
 class _AlertBanner extends StatelessWidget {
-  final LiveData data;
-  const _AlertBanner({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      key: const ValueKey('alert-banner'),
-      decoration: const BoxDecoration(
-        color: Color(0xFFFCEBEB),
-        borderRadius: BorderRadius.only(
-          topRight: Radius.circular(8),
-          bottomRight: Radius.circular(8),
-        ),
-        border: Border(
-          left: BorderSide(color: FarmLensColors.alert, width: 4),
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '⚠ Disease Alert',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: FarmLensColors.alert,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  formatDetectionClass(data.detectionClass),
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: FarmLensColors.textPrimary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _ScorePill(value: data.ccombined, color: FarmLensColors.alert),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-// Section 3 – Gauge Card
-// ─────────────────────────────────────────────
-
-class _GaugeCard extends StatelessWidget {
-  final LiveData data;
-  const _GaugeCard({required this.data});
-
+  final String detectionClass;
+  const _AlertBanner({required this.detectionClass});
   @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: FarmLensColors.card,
+        color: FarmLensColors.alert.withAlpha(20),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: FarmLensColors.border, width: 0.5),
+        border: Border.all(color: FarmLensColors.alert.withAlpha(80)),
       ),
-      child: Column(
+      child: Row(
         children: [
-          _AnimatedGauge(value: data.ccombined),
-          const SizedBox(height: 8),
-          const Text(
-            'Combined Score',
-            style: TextStyle(
-              fontSize: 12,
-              color: FarmLensColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Cv ${data.cv.toStringAsFixed(2)}  ·  Cs ${data.cs.toStringAsFixed(2)}',
-            style: const TextStyle(
-              fontSize: 11,
-              color: FarmLensColors.textSecondary,
+          const Icon(Icons.warning_amber_rounded,
+              color: FarmLensColors.alert, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '⚠  Alert: ${formatDetectionClass(detectionClass)}',
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: FarmLensColors.alert),
             ),
           ),
         ],
@@ -412,87 +342,190 @@ class _GaugeCard extends StatelessWidget {
   }
 }
 
-class _AnimatedGauge extends StatefulWidget {
-  final double value;
-  const _AnimatedGauge({required this.value});
+// ─── Detection Card ───────────────────────────────────────────────────────────
 
-  @override
-  State<_AnimatedGauge> createState() => _AnimatedGaugeState();
-}
-
-class _AnimatedGaugeState extends State<_AnimatedGauge>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
-  double _previousValue = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    );
-    _animation = Tween<double>(begin: 0, end: widget.value).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
-    _controller.forward();
-  }
-
-  @override
-  void didUpdateWidget(_AnimatedGauge oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.value != widget.value) {
-      _previousValue = oldWidget.value;
-      _animation = Tween<double>(
-        begin: _previousValue,
-        end: widget.value,
-      ).animate(
-          CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
-      _controller
-        ..reset()
-        ..forward();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
+class _DetectionCard extends StatelessWidget {
+  final LiveData data;
+  const _DetectionCard({required this.data});
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _animation,
-      builder: (context, _) {
-        final v = _animation.value.clamp(0.0, 1.0);
-        final color = ccombinedColor(v);
-        return SizedBox(
-          width: 180,
-          height: 110,
-          child: Stack(
-            alignment: Alignment.center,
+    final healthy = data.detectionClass.toLowerCase().contains('healthy');
+    final color = healthy ? FarmLensColors.primary : FarmLensColors.alert;
+    return _Card(
+      child: Row(
+        children: [
+          Container(
+            width: 48, height: 48,
+            decoration: BoxDecoration(
+              color: color.withAlpha(25),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              healthy ? Icons.eco_rounded : Icons.bug_report_outlined,
+              color: color, size: 24,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('AI Detection',
+                    style: TextStyle(
+                        fontSize: 11, color: FarmLensColors.textSecondary)),
+                const SizedBox(height: 4),
+                Text(formatDetectionClass(data.detectionClass),
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: color)),
+              ],
+            ),
+          ),
+          Text('${(data.detectionConf * 100).toStringAsFixed(0)}%',
+              style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: color)),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Combined Score Card ──────────────────────────────────────────────────────
+
+class _CombinedScoreCard extends StatelessWidget {
+  final LiveData data;
+  const _CombinedScoreCard({required this.data});
+  @override
+  Widget build(BuildContext context) {
+    final color = ccombinedColor(data.ccombined);
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              CustomPaint(
-                size: const Size(180, 110),
-                painter: _GaugePainter(value: v, color: color),
-              ),
-              Positioned(
-                bottom: 8,
-                child: Text(
-                  v.toStringAsFixed(2),
+              const Text('Combined Score  (Ccombined)',
                   style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: color,
+                      fontSize: 11, color: FarmLensColors.textSecondary)),
+              const Spacer(),
+              if (data.alert)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: FarmLensColors.alert,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text('ALERT',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: data.ccombined.clamp(0.0, 1.0),
+                    minHeight: 10,
+                    backgroundColor: FarmLensColors.border,
+                    valueColor: AlwaysStoppedAnimation<Color>(color),
                   ),
                 ),
               ),
+              const SizedBox(width: 12),
+              Text(data.ccombined.toStringAsFixed(3),
+                  style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: color)),
             ],
           ),
-        );
-      },
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Sensor Card ──────────────────────────────────────────────────────────────
+
+class _SensorCard extends StatelessWidget {
+  final String label;
+  final double value;
+  final String unit;
+  final IconData icon;
+  final int stress;
+  final Color activeColor;
+  const _SensorCard({
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.icon,
+    required this.stress,
+    required this.activeColor,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final isStress = stress == 1;
+    final displayColor = isStress ? FarmLensColors.alert : activeColor;
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: displayColor),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(label,
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: FarmLensColors.textSecondary)),
+              ),
+              if (isStress)
+                const Icon(Icons.warning_amber_rounded,
+                    size: 14, color: FarmLensColors.alert),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _GaugeArc(value: value / 100.0, color: displayColor),
+          const SizedBox(height: 6),
+          Center(
+            child: Text('${value.toStringAsFixed(1)}$unit',
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: isStress
+                        ? FarmLensColors.alert
+                        : FarmLensColors.textPrimary)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Gauge Arc ────────────────────────────────────────────────────────────────
+
+class _GaugeArc extends StatelessWidget {
+  final double value;
+  final Color color;
+  const _GaugeArc({required this.value, required this.color});
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 60,
+      child: CustomPaint(
+        painter: _GaugePainter(value: value.clamp(0.0, 1.0), color: color),
+      ),
     );
   }
 }
@@ -500,209 +533,67 @@ class _AnimatedGaugeState extends State<_AnimatedGauge>
 class _GaugePainter extends CustomPainter {
   final double value;
   final Color color;
-  static const double strokeWidth = 14;
-
   const _GaugePainter({required this.value, required this.color});
-
   @override
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
-    final cy = size.height - 10;
-    final radius = (size.width / 2) - (strokeWidth / 2);
-
-    final trackPaint = Paint()
-      ..color = const Color(0xFFE8E8E4)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round;
-
-    final valuePaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round;
-
+    final cy = size.height * 0.9;
+    final r = math.min(cx, cy) * 0.9;
     canvas.drawArc(
-      Rect.fromCircle(center: Offset(cx, cy), radius: radius),
-      math.pi,
-      math.pi,
-      false,
-      trackPaint,
+      Rect.fromCircle(center: Offset(cx, cy), radius: r),
+      math.pi, math.pi, false,
+      Paint()
+        ..color = FarmLensColors.border
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 8
+        ..strokeCap = StrokeCap.round,
     );
-
-    if (value > 0) {
-      canvas.drawArc(
-        Rect.fromCircle(center: Offset(cx, cy), radius: radius),
-        math.pi,
-        math.pi * value,
-        false,
-        valuePaint,
-      );
-    }
+    canvas.drawArc(
+      Rect.fromCircle(center: Offset(cx, cy), radius: r),
+      math.pi, math.pi * value, false,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 8
+        ..strokeCap = StrokeCap.round,
+    );
   }
-
   @override
   bool shouldRepaint(_GaugePainter old) =>
       old.value != value || old.color != color;
 }
 
-// ─────────────────────────────────────────────
-// Section 4 – Sensor Card
-// ─────────────────────────────────────────────
+// ─── Score Chip ───────────────────────────────────────────────────────────────
 
-class _SensorCard extends StatelessWidget {
-  final String title;
-  final double pct;
-  final bool stress;
-
-  const _SensorCard({
-    required this.title,
-    required this.pct,
-    required this.stress,
-  });
-
+class _ScoreChip extends StatelessWidget {
+  final String label;
+  final double value;
+  final Color color;
+  const _ScoreChip(
+      {required this.label, required this.value, required this.color});
   @override
   Widget build(BuildContext context) {
-    final color = stress ? FarmLensColors.alert : FarmLensColors.primary;
-    final clampedPct = pct.clamp(0.0, 100.0);
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: FarmLensColors.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: FarmLensColors.border, width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return _Card(
+      child: Row(
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 11,
-              color: FarmLensColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '${clampedPct.toStringAsFixed(0)}%',
-            style: TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: SizedBox(
-              height: 6,
-              child: LinearProgressIndicator(
-                value: clampedPct / 100,
-                backgroundColor: FarmLensColors.border,
-                valueColor: AlwaysStoppedAnimation<Color>(color),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            width: 4, height: 32,
             decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              stress ? 'STRESS' : 'OK',
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
+                color: color, borderRadius: BorderRadius.circular(2)),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-// Section 5 – Detection Card
-// ─────────────────────────────────────────────
-
-class _DetectionCard extends StatelessWidget {
-  final LiveData data;
-  const _DetectionCard({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    final disease = isDisease(data.detectionClass);
-    final pillBg =
-        disease ? const Color(0xFFFCEBEB) : const Color(0xFFE1F5EE);
-    final pillText =
-        disease ? FarmLensColors.alert : FarmLensColors.primary;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: FarmLensColors.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: FarmLensColors.border, width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Latest Detection',
-            style: TextStyle(
-              fontSize: 11,
-              color: FarmLensColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      formatDetectionClass(data.detectionClass),
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: FarmLensColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      timeAgo(data.ts),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: FarmLensColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: pillBg,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '${(data.detectionConf * 100).toStringAsFixed(0)}%',
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 10, color: FarmLensColors.textSecondary)),
+              const SizedBox(height: 2),
+              Text(value.toStringAsFixed(3),
                   style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: pillText,
-                  ),
-                ),
-              ),
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: color)),
             ],
           ),
         ],
@@ -711,116 +602,75 @@ class _DetectionCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// Section 6 – Error State
-// ─────────────────────────────────────────────
+// ─── Cycle Info Card ──────────────────────────────────────────────────────────
 
-class _ErrorState extends StatelessWidget {
-  final ConnectionProvider connProvider;
+class _CycleInfoCard extends StatelessWidget {
   final LiveData data;
-
-  const _ErrorState({required this.connProvider, required this.data});
-
+  const _CycleInfoCard({required this.data});
   @override
   Widget build(BuildContext context) {
-    final settings = Provider.of<SettingsProvider>(context, listen: false);
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.wifi_off_rounded,
-              size: 48,
-              color: FarmLensColors.textSecondary,
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'No data from device',
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Cycle Info',
               style: TextStyle(
-                fontSize: 16,
-                color: FarmLensColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              data.ts == 0
-                  ? 'Last seen: Never'
-                  : 'Last seen: ${timeAgo(data.ts)}',
-              style: const TextStyle(
-                fontSize: 12,
-                color: FarmLensColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Check device is on the same WiFi network',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12,
-                color: FarmLensColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed:
-                  connProvider.state == DeviceConnectionState.connecting
-                      ? null
-                      : () =>
-                          connProvider.connect(settings.deviceBaseUrl),
-              icon: connProvider.state == DeviceConnectionState.connecting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.refresh_rounded),
-              label: const Text('Retry'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: FarmLensColors.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-                elevation: 0,
-              ),
-            ),
-          ],
-        ),
+                  fontSize: 11, color: FarmLensColors.textSecondary)),
+          const SizedBox(height: 8),
+          _InfoRow(label: 'Cycle ID', value: data.cycleId),
+          _InfoRow(label: 'Node', value: data.nodeId),
+          _InfoRow(label: 'Uptime', value: timeAgo(data.ts)),
+        ],
       ),
     );
   }
 }
 
-// ─────────────────────────────────────────────
-// Shared – Score Pill
-// ─────────────────────────────────────────────
+class _InfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+  const _InfoRow({required this.label, required this.value});
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 12, color: FarmLensColors.textSecondary)),
+          ),
+          Expanded(
+            child: Text(value,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: FarmLensColors.textPrimary)),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-class _ScorePill extends StatelessWidget {
-  final double value;
-  final Color color;
-  const _ScorePill({required this.value, required this.color});
+// ─── Card wrapper ─────────────────────────────────────────────────────────────
 
+class _Card extends StatelessWidget {
+  final Widget child;
+  const _Card({required this.child});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
+        color: FarmLensColors.card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: FarmLensColors.border, width: 0.5),
       ),
-      child: Text(
-        value.toStringAsFixed(2),
-        style: const TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          color: Colors.white,
-        ),
-      ),
+      child: child,
     );
   }
 }
