@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/live_provider.dart';
 import '../theme.dart';
 import 'dashboard_screen.dart';
+import 'camera_screen.dart';
 import 'alerts_screen.dart';
 import 'log_screen.dart';
 import 'settings_screen.dart';
@@ -19,6 +20,7 @@ class _MainShellState extends State<MainShell> {
 
   static const List<Widget> _screens = [
     DashboardScreen(),
+    CameraScreen(),      // ← NEW: live RPi camera feed
     AlertsScreen(),
     LogScreen(),
     SettingsScreen(),
@@ -82,23 +84,29 @@ class _FarmLensBottomNav extends StatelessWidget {
                 onTap: () => onTap(0),
               ),
               _NavItem(
-                icon: Icons.notifications_outlined,
-                label: 'Alerts',
+                icon: Icons.videocam_outlined,
+                label: 'Camera',
                 isSelected: currentIndex == 1,
                 onTap: () => onTap(1),
+              ),
+              _NavItem(
+                icon: Icons.notifications_outlined,
+                label: 'Alerts',
+                isSelected: currentIndex == 2,
+                onTap: () => onTap(2),
                 badgeCount: alertCount,
               ),
               _NavItem(
                 icon: Icons.list_alt_outlined,
                 label: 'Log',
-                isSelected: currentIndex == 2,
-                onTap: () => onTap(2),
+                isSelected: currentIndex == 3,
+                onTap: () => onTap(3),
               ),
               _NavItem(
                 icon: Icons.settings_outlined,
                 label: 'Settings',
-                isSelected: currentIndex == 3,
-                onTap: () => onTap(3),
+                isSelected: currentIndex == 4,
+                onTap: () => onTap(4),
               ),
             ],
           ),
@@ -135,11 +143,9 @@ class _NavItem extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Icon with optional pill background + badge
             Stack(
               clipBehavior: Clip.none,
               children: [
-                // Pill background when selected
                 if (isSelected)
                   Positioned.fill(
                     child: Container(
@@ -155,7 +161,6 @@ class _NavItem extends StatelessWidget {
                       horizontal: 8, vertical: 4),
                   child: Icon(icon, size: 22, color: color),
                 ),
-                // Red badge
                 if (badgeCount > 0)
                   Positioned(
                     top: 0,
@@ -187,9 +192,8 @@ class _NavItem extends StatelessWidget {
               style: TextStyle(
                 fontSize: 10,
                 color: color,
-                fontWeight: isSelected
-                    ? FontWeight.w600
-                    : FontWeight.normal,
+                fontWeight:
+                    isSelected ? FontWeight.w600 : FontWeight.normal,
               ),
             ),
           ],
